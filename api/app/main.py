@@ -6,11 +6,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import excel_export
 from .config import settings
 from .local_store import LocalSheetStore
 
@@ -200,6 +201,37 @@ def patch_sheet_cells(
         return {"ok": True, "count": len(changes)}
     except Exception as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+class ExportOverride(BaseModel):
+    r: int
+    c: str
+    v: Any = None
+
+
+class ExportBody(BaseModel):
+    overrides: list[ExportOverride] = []
+
+
+@app.post("/api/v1/sheets/{sheet_id}/export")
+def export_sheet(sheet_id: str, body: ExportBody):
+    """Stream the active sheet as a styled single-sheet .xlsx (openpyxl template).
+
+    Independent of DATA_BACKEND: the client posts its current edits and we overlay
+    them onto the pre-built template, so this works in local/supabase/databricks.
+    """
+    sheet_id = _sheet_key(sheet_id)
+    try:
+        data, filename = excel_export.build_export_bytes(
+            sheet_id, [o.model_dump() for o in body.overrides]
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(
+        content=data,
+        media_type=excel_export.XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class SessionPutBody(BaseModel):

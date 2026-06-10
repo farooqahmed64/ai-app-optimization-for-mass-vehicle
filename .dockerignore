@@ -13,6 +13,8 @@ api/.venv
 *.zip
 *.xlsm
 workbooks
+# NOTE: do NOT add `*.xlsx` here — the runtime export feature ships the pre-built
+# templates in api/export_templates/*.xlsx, which must be present in the image.
 web/.wght-server.pid
 # Not needed at runtime in Supabase mode (data comes from Supabase); keeps image small.
 web/public/data/bd-sheet.json

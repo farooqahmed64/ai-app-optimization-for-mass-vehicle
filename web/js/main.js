@@ -47,7 +47,8 @@ import {
   probeSheetApi,
   patchSheetCells,
   fetchSession,
-} from './sheetDataApi.js?v=p2';
+  exportSheetXlsx,
+} from './sheetDataApi.js?v=xlsx-export1';
 import {
   buildMatrixState,
   applyMatrixSave,
@@ -55,6 +56,7 @@ import {
   cloneStructure,
 } from './structureModel.js?v=bookmark-sync1';
 import {
+  extractSheetEdits,
   upsertRawCell,
   loadLocalSnapshot,
   clearLocalSnapshot,
@@ -179,6 +181,14 @@ const App = {
     const isGridPage = computed(
       () => route.value === 'database' || route.value === 'synthesis'
     );
+    // `session` is a plain object, so its nested `loading` ref does NOT auto-unwrap
+    // in templates (Vue only unwraps refs nested in reactive objects). Expose it as
+    // a top-level computed so `!sessionLoading` in the topbar evaluates correctly.
+    const sessionLoading = computed(() => session.loading.value);
+    // Legacy topbar actions (Enregistrer / Restaurer Synthesis / Fichiers projet)
+    // are kept in the template but hidden — flip to true to show them again.
+    // Edits still persist via autosave; Export Excel stays visible regardless.
+    const showLegacyTopbarActions = false;
 
     const canUndo = computed(() => {
       void historyTick.value;
@@ -1828,6 +1838,42 @@ const App = {
       await autoSave.saveNow();
     }
 
+    const exporting = ref(false);
+
+    /** Edited cells of the active sheet, shaped for the export endpoint. */
+    function collectOverrides(raw) {
+      if (!raw) return [];
+      return extractSheetEdits(raw).cells.map(({ r, c, v }) => ({ r, c, v }));
+    }
+
+    async function exportToExcel() {
+      if (exporting.value) return;
+      const sheetId = isDatabase.value ? 'bd' : isSynthesis.value ? 'synthesis' : null;
+      if (!sheetId) return;
+      flushActiveGridEdit();
+      const raw = sheetId === 'bd' ? bdRaw.value : synRaw.value;
+      exporting.value = true;
+      try {
+        const blob = await exportSheetXlsx(sheetId, collectOverrides(raw));
+        const filename = sheetId === 'bd' ? 'Database.xlsx' : 'Synthesis.xlsx';
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(href);
+      } catch (e) {
+        error.value =
+          e && e.message === 'EXPORT_UNAVAILABLE'
+            ? 'Export Excel indisponible — lancez run-supabase-server.bat (backend Python).'
+            : `Export Excel échoué — ${(e && e.message) || e}`;
+      } finally {
+        exporting.value = false;
+      }
+    }
+
     async function resetFromServerFiles() {
       if (
         !confirm(
@@ -2252,11 +2298,15 @@ const App = {
       isOptionsSp2,
       isCdcOutput,
       isGridPage,
+      sessionLoading,
+      showLegacyTopbarActions,
       dirty,
       saveStatus,
       saveError,
       loadedFromLocal,
       saveNow,
+      exporting,
+      exportToExcel,
       resetFromServerFiles,
       restoreSynthesisFromProject,
       route,
@@ -2442,10 +2492,26 @@ const App = {
           <span class="status error-text" v-else-if="isGridPage && saveStatus === 'error'">
             Erreur — {{ saveError }}
           </span>
-          <template v-if="isGridPage && !session.loading">
-            <button type="button" class="topbar-save-btn" @click="saveNow">Enregistrer</button>
+          <template v-if="isGridPage && !sessionLoading">
             <button
-              v-if="isSynthesis"
+              v-show="showLegacyTopbarActions"
+              type="button"
+              class="topbar-save-btn"
+              @click="saveNow"
+            >
+              Enregistrer
+            </button>
+            <button
+              type="button"
+              class="topbar-save-btn topbar-save-btn-muted"
+              title="Télécharger la feuille active au format Excel (.xlsx), mise en forme identique"
+              :disabled="exporting"
+              @click="exportToExcel"
+            >
+              {{ exporting ? 'Export…' : 'Export Excel' }}
+            </button>
+            <button
+              v-show="showLegacyTopbarActions && isSynthesis"
               type="button"
               class="topbar-save-btn topbar-save-btn-muted"
               title="Recharger synthesis-sheet.json (bande ADAPTATION + sous-sections)"
@@ -2454,6 +2520,7 @@ const App = {
               Restaurer Synthesis
             </button>
             <button
+              v-show="showLegacyTopbarActions"
               type="button"
               class="topbar-save-btn topbar-save-btn-muted"
               title="Recharger les JSON du projet (efface la copie locale)"

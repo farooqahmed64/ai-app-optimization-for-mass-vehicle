@@ -372,4 +372,25 @@ export async function patchSheetCells(sheetId, changes) {
   return res.json();
 }
 
+/**
+ * Export the active sheet as a styled single-sheet .xlsx (server-side, openpyxl).
+ * Requires the FastAPI backend: in Node-only mode the catch-all serves index.html
+ * (text/html), which we detect and surface as EXPORT_UNAVAILABLE.
+ * @param {'bd'|'synthesis'} sheetId
+ * @param {{ r: number, c: string, v: * }[]} overrides
+ * @returns {Promise<Blob>}
+ */
+export async function exportSheetXlsx(sheetId, overrides) {
+  const res = await fetch(url(`/api/v1/sheets/${sheetId}/export`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ overrides: overrides || [] }),
+  });
+  const ct = res.headers.get('content-type') || '';
+  if (!res.ok || ct.includes('text/html')) {
+    throw new Error('EXPORT_UNAVAILABLE');
+  }
+  return res.blob();
+}
+
 export { mergeMeta, CHUNK_ROWS };
