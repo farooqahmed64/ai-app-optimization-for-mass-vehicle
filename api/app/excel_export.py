@@ -9,6 +9,7 @@ to bytes, then restore the cached cells so the next request starts clean.
 
 from __future__ import annotations
 
+import re
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -51,6 +52,12 @@ def _coerce(value, number_format: str):
 
     Cells formatted as text ('@') keep their string verbatim — this protects
     zero-padded codes (e.g. "007") from being collapsed to an int.
+
+    The frontend sends values in the app's French display format — comma as the
+    decimal separator and (rarely) whitespace (space / NBSP / narrow NBSP) as
+    thousand separators. We normalise to a plain number so numeric cells stay
+    numeric (type 'n') and render via their original number format, instead of
+    becoming "number stored as text".
     """
     if value is None:
         return None
@@ -61,13 +68,14 @@ def _coerce(value, number_format: str):
         return None
     if number_format and "@" in number_format:
         return s
-    neg = s[1:] if s.startswith("-") else s
+    norm = re.sub(r"\s", "", s).replace(",", ".")
+    neg = norm[1:] if norm.startswith("-") else norm
     if neg.isdigit():
-        return int(s)
+        return int(norm)
     try:
-        return float(s)
+        return float(norm)
     except ValueError:
-        return s
+        return s  # genuine text (label, code) — keep the original verbatim
 
 
 def build_export_bytes(sheet: str, overrides: list[dict]) -> tuple[bytes, str]:

@@ -55,6 +55,7 @@ import {
   alignSynModelToBd,
   cloneStructure,
 } from './structureModel.js?v=bookmark-sync1';
+import { createSynCalcContext } from './synMaterialize.js?v=xlsx-export1';
 import {
   extractSheetEdits,
   upsertRawCell,
@@ -1840,10 +1841,43 @@ const App = {
 
     const exporting = ref(false);
 
-    /** Edited cells of the active sheet, shaped for the export endpoint. */
-    function collectOverrides(raw) {
-      if (!raw) return [];
-      return extractSheetEdits(raw).cells.map(({ r, c, v }) => ({ r, c, v }));
+    /**
+     * Overrides for the export endpoint. The old version sent only `userEdited`
+     * cells, so dependent cells that recalculate from an edit (Synthesis SUMPRODUCT
+     * mass + adaptation sums) were missing and the .xlsx kept the template's stale
+     * values. We now also include those computed cells:
+     *  - user-typed edits (both sheets), plus
+     *  - for Synthesis, the full set of live-calculated cells via the same engine the
+     *    grid uses (`createSynCalcContext().materializeAll()`), which is bounded to the
+     *    live-mass columns × rows (fast — NOT every cell), so the export matches what
+     *    the user sees.
+     * BD has no live cross-cell recompute in the app (the formula engine is dormant),
+     * so user edits alone are correct there.
+     */
+    function collectOverrides(sheetId, raw) {
+      if (!raw || !Array.isArray(raw.cells)) return [];
+      const out = [];
+      const seen = new Set();
+      for (const cell of raw.cells) {
+        if (cell.userEdited) {
+          out.push({ r: cell.r, c: cell.c, v: cell.v == null ? '' : String(cell.v) });
+          seen.add(`${cell.r}:${cell.c}`);
+        }
+      }
+      if (sheetId === 'synthesis' && bdSheet.value && synthesisSheet.value) {
+        try {
+          const ctx = createSynCalcContext(bdSheet.value, synthesisSheet.value);
+          for (const p of ctx.materializeAll()) {
+            const key = `${p.r}:${p.c}`;
+            if (seen.has(key)) continue;
+            out.push({ r: p.r, c: p.c, v: p.v == null ? '' : String(p.v) });
+            seen.add(key);
+          }
+        } catch (e) {
+          console.warn('Synthesis materialize for export failed:', e);
+        }
+      }
+      return out;
     }
 
     async function exportToExcel() {
@@ -1854,7 +1888,7 @@ const App = {
       const raw = sheetId === 'bd' ? bdRaw.value : synRaw.value;
       exporting.value = true;
       try {
-        const blob = await exportSheetXlsx(sheetId, collectOverrides(raw));
+        const blob = await exportSheetXlsx(sheetId, collectOverrides(sheetId, raw));
         const filename = sheetId === 'bd' ? 'Database.xlsx' : 'Synthesis.xlsx';
         const href = URL.createObjectURL(blob);
         const a = document.createElement('a');
